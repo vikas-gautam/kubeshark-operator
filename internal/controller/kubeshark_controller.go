@@ -2,6 +2,7 @@ package controller
 
 import (
 	"context"
+	"fmt"
 
 	kubesharkv1beta1 "kubeshark-operator/api/v1beta1"
 
@@ -171,10 +172,20 @@ func (r *KubesharkReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		}
 		logger.Info("Cleanup done for configmap")
 
-		if err := r.cleanupResource(ctx, cr, &corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{Name: "kubeshark-service-account"}}); err != nil {
-			return ctrl.Result{}, err
+		serviceAccounts := []string{"kubeshark-service-account", "kubeshark-worker"}
+
+		for _, saName := range serviceAccounts {
+			sa := &corev1.ServiceAccount{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      saName,
+					Namespace: cr.Namespace, // Make sure namespace is set if needed
+				},
+			}
+			if err := r.cleanupResource(ctx, cr, sa); err != nil {
+				return ctrl.Result{}, err
+			}
+			logger.Info(fmt.Sprintf("Cleanup done for ServiceAccount: %s", saName))
 		}
-		logger.Info("Cleanup done for serviceaccount")
 
 		if err := r.cleanupResource(ctx, cr, &rbacv1.ClusterRole{ObjectMeta: metav1.ObjectMeta{Name: "kubeshark-cluster-role"}}); err != nil {
 			return ctrl.Result{}, err
@@ -218,7 +229,7 @@ func (r *KubesharkReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 
 	return ctrl.Result{}, nil
 }
-
+	
 // SetupWithManager sets up the controller with the Manager.
 func (r *KubesharkReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
