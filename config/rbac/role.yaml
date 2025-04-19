@@ -1,0 +1,32 @@
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: manager-role
+rules:
+- apiGroups:
+  - kubeshark.opstreelabs.in
+  resources:
+  - kubesharks
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - kubeshark.opstreelabs.in
+  resources:
+  - kubesharks/finalizers
+  verbs:
+  - update
+- apiGroups:
+  - kubeshark.opstreelabs.in
+  resources:
+  - kubesharks/status
+  verbs:
+  - get
+  - patch
+  - update

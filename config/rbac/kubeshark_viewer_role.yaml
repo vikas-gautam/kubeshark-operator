@@ -1,0 +1,27 @@
+# permissions for end users to view kubesharks.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  labels:
+    app.kubernetes.io/name: clusterrole
+    app.kubernetes.io/instance: kubeshark-viewer-role
+    app.kubernetes.io/component: rbac
+    app.kubernetes.io/created-by: kubeshark-operator
+    app.kubernetes.io/part-of: kubeshark-operator
+    app.kubernetes.io/managed-by: kustomize
+  name: kubeshark-viewer-role
+rules:
+- apiGroups:
+  - kubeshark.opstreelabs.in
+  resources:
+  - kubesharks
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - kubeshark.opstreelabs.in
+  resources:
+  - kubesharks/status
+  verbs:
+  - get

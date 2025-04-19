@@ -1,0 +1,12 @@
+apiVersion: kubeshark.opstreelabs.in/v1beta1
+kind: Kubeshark
+metadata:
+  labels:
+    app.kubernetes.io/name: kubeshark
+    app.kubernetes.io/instance: kubeshark-sample
+    app.kubernetes.io/part-of: kubeshark-operator
+    app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/created-by: kubeshark-operator
+  name: kubeshark-sample
+spec:
+  # TODO(user): Add fields here
