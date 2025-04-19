@@ -223,9 +223,13 @@ func (r *KubesharkReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 func (r *KubesharkReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&kubesharkv1beta1.Kubeshark{}).
-		Owns(&appsv1.Deployment{}).
-		Owns(&corev1.Service{}).
-		Owns(&networkingv1.Ingress{}).
-		Owns(&corev1.ConfigMap{}).
+		Owns(&appsv1.Deployment{}).         // Hub deployment
+		Owns(&appsv1.DaemonSet{}).          // Worker DaemonSet
+		Owns(&corev1.Service{}).            // Services for Hub/Worker
+		Owns(&networkingv1.Ingress{}).      // Ingress
+		Owns(&corev1.ConfigMap{}).          // ConfigMaps
+		Owns(&corev1.ServiceAccount{}).     // SA for Hub/Worker
+		Owns(&rbacv1.ClusterRole{}).        // ClusterRole
+		Owns(&rbacv1.ClusterRoleBinding{}). // ClusterRoleBinding
 		Complete(r)
 }
