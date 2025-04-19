@@ -42,7 +42,7 @@ privileges or be logged in as admin.
 You can apply the samples (examples) from the config/sample:
 
 ```sh
-kubectl apply -k config/samples/
+kubectl apply -k example/v1beta1/
 ```
 
 >**NOTE**: Ensure that the samples has default values to test it out.
@@ -51,7 +51,7 @@ kubectl apply -k config/samples/
 **Delete the instances (CRs) from the cluster:**
 
 ```sh
-kubectl delete -k config/samples/
+kubectl delete -k example/v1beta1/
 ```
 
 **Delete the APIs(CRDs) from the cluster:**
