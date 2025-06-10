@@ -151,6 +151,18 @@ spec:
                 type: string
               namespace:
                 type: string
+              secretKubeshark:
+                description: "\U0001F510 Nested struct for secret values"
+                properties:
+                  license:
+                    type: string
+                  oidcClientID:
+                    type: string
+                  oidcClientSecret:
+                    type: string
+                  scriptingEnvJson:
+                    type: string
+                type: object
               serviceAccountHub:
                 type: string
               serviceAccountWorker:

@@ -51,6 +51,8 @@ type KubesharkSpec struct {
 	IngressName            string                 `json:"ingressName,omitempty"`
 	IngressClassName       string                 `json:"ingressClassName,omitempty"`
 	HubConfigMapName       string                 `json:"hubConfigMapName,omitempty"`
+	// 🔐 Nested struct for secret values
+	SecretKubeshark SecretKubesharkSpec `json:"secretKubeshark,omitempty"`
 }
 
 // KubesharkStatus defines the observed state of Kubeshark
@@ -60,6 +62,13 @@ type KubesharkStatus struct {
 
 	// Phase indicates the current phase of the resource
 	Phase string `json:"phase,omitempty"`
+}
+
+type SecretKubesharkSpec struct {
+	License          string `json:"license,omitempty"`
+	ScriptingEnvJson string `json:"scriptingEnvJson,omitempty"`
+	OidcClientID     string `json:"oidcClientID,omitempty"`
+	OidcClientSecret string `json:"oidcClientSecret,omitempty"`
 }
 
 //+kubebuilder:object:root=true

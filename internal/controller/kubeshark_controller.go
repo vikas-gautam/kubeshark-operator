@@ -153,83 +153,167 @@ func (r *KubesharkReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	}
 	logger.Info(resp, "name", frontendIngress.Name)
 
+	secretKubeshark, resp, err := r.createOrUpdateKubesharkSecret(cr, labels)
+	if err != nil {
+		logger.Error(err, "Failed to create secretKubeshark")
+		return ctrl.Result{}, err
+	}
+	logger.Info(resp, "name", secretKubeshark.Name)
+
 	// Handle deletion
 	if !cr.ObjectMeta.DeletionTimestamp.IsZero() {
-		// Perform cleanup for various resources
+		logger := log.FromContext(ctx)
 
-		if err := r.cleanupResource(ctx, cr, &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: getOrDefaultString(cr.Spec.HubServiceName, "kubeshark-hub-service")}}); err != nil {
+		if err := r.cleanupResource(ctx, cr, &corev1.Service{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      getOrDefaultString(cr.Spec.HubServiceName, "kubeshark-hub"),
+				Namespace: cr.Namespace,
+			},
+		}); err != nil {
 			return ctrl.Result{}, err
 		}
-		logger.Info("Cleanup done for Service")
+		logger.Info("Cleanup done for Hub Service")
 
-		if err := r.cleanupResource(ctx, cr, &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: getOrDefaultString(cr.Spec.HubDeploymentName, "kubeshark-hub-deployment")}}); err != nil {
+		if err := r.cleanupResource(ctx, cr, &appsv1.Deployment{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      getOrDefaultString(cr.Spec.HubDeploymentName, "kubeshark-hub-deployment"),
+				Namespace: cr.Namespace,
+			},
+		}); err != nil {
 			return ctrl.Result{}, err
 		}
-		logger.Info("Cleanup done for deployment")
+		logger.Info("Cleanup done for Hub Deployment")
 
-		if err := r.cleanupResource(ctx, cr, &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: getOrDefaultString(cr.Spec.HubConfigMapName, "kubeshark-hub-config")}}); err != nil {
+		if err := r.cleanupResource(ctx, cr, &corev1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      getOrDefaultString(cr.Spec.HubConfigMapName, "kubeshark-config-map"),
+				Namespace: cr.Namespace,
+			},
+		}); err != nil {
 			return ctrl.Result{}, err
 		}
-		logger.Info("Cleanup done for configmap")
+		logger.Info("Cleanup done for Hub ConfigMap")
 
-		serviceAccounts := []string{"kubeshark-service-account", "kubeshark-worker"}
+		if err := r.cleanupResource(ctx, cr, &appsv1.DaemonSet{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      getOrDefaultString(cr.Spec.WorkerDaemonSetName, "kubeshark-worker-daemonset"),
+				Namespace: cr.Namespace,
+			},
+		}); err != nil {
+			return ctrl.Result{}, err
+		}
+		logger.Info("Cleanup done for Worker DaemonSet")
 
-		for _, saName := range serviceAccounts {
-			sa := &corev1.ServiceAccount{
+		if err := r.cleanupResource(ctx, cr, &corev1.Service{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "kubeshark-frontend-service",
+				Namespace: cr.Namespace,
+			},
+		}); err != nil {
+			return ctrl.Result{}, err
+		}
+		logger.Info("Cleanup done for Frontend Service")
+
+		if err := r.cleanupResource(ctx, cr, &appsv1.Deployment{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "kubeshark-frontend-deployment",
+				Namespace: cr.Namespace,
+			},
+		}); err != nil {
+			return ctrl.Result{}, err
+		}
+		logger.Info("Cleanup done for Frontend Deployment")
+
+		if err := r.cleanupResource(ctx, cr, &networkingv1.Ingress{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      getOrDefaultString(cr.Spec.IngressName, "kubeshark-frontend-ingress"),
+				Namespace: cr.Namespace,
+			},
+		}); err != nil {
+			return ctrl.Result{}, err
+		}
+		logger.Info("Cleanup done for Frontend Ingress")
+
+		if err := r.cleanupResource(ctx, cr, &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "kubeshark-secret",
+				Namespace: cr.Namespace,
+			},
+		}); err != nil {
+			return ctrl.Result{}, err
+		}
+		logger.Info("Cleanup done for Kubeshark Secret")
+
+		if err := r.cleanupResource(ctx, cr, &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "kubeshark-saml-x509-crt-secret",
+				Namespace: cr.Namespace,
+			},
+		}); err != nil {
+			return ctrl.Result{}, err
+		}
+		logger.Info("Cleanup done for SAML Cert Secret")
+
+		if err := r.cleanupResource(ctx, cr, &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "kubeshark-saml-x509-key-secret",
+				Namespace: cr.Namespace,
+			},
+		}); err != nil {
+			return ctrl.Result{}, err
+		}
+		logger.Info("Cleanup done for SAML Key Secret")
+
+		// Service Accounts
+		serviceAccountNames := []string{
+			getOrDefaultString(cr.Spec.ServiceAccountHub, "kubeshark-service-account"),
+			getOrDefaultString(cr.Spec.ServiceAccountWorker, "kubeshark-worker"),
+		}
+
+		for _, saName := range serviceAccountNames {
+			if err := r.cleanupResource(ctx, cr, &corev1.ServiceAccount{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      saName,
-					Namespace: cr.Namespace, // Make sure namespace is set if needed
+					Namespace: cr.Namespace,
 				},
-			}
-			if err := r.cleanupResource(ctx, cr, sa); err != nil {
+			}); err != nil {
 				return ctrl.Result{}, err
 			}
 			logger.Info(fmt.Sprintf("Cleanup done for ServiceAccount: %s", saName))
 		}
 
-		if err := r.cleanupResource(ctx, cr, &rbacv1.ClusterRole{ObjectMeta: metav1.ObjectMeta{Name: "kubeshark-cluster-role"}}); err != nil {
+		// ClusterRole & ClusterRoleBinding — not namespaced, but follow same pattern
+		if err := r.cleanupResource(ctx, cr, &rbacv1.ClusterRole{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: getOrDefaultString(cr.Spec.ClusterRoleName, "kubeshark-cluster-role"),
+			},
+		}); err != nil {
 			return ctrl.Result{}, err
 		}
 		logger.Info("Cleanup done for ClusterRole")
 
-		if err := r.cleanupResource(ctx, cr, &rbacv1.ClusterRoleBinding{ObjectMeta: metav1.ObjectMeta{Name: "kubeshark-cluster-role-binding"}}); err != nil {
+		if err := r.cleanupResource(ctx, cr, &rbacv1.ClusterRoleBinding{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: getOrDefaultString(cr.Spec.ClusterRoleBindingName, "kubeshark-cluster-role-binding"),
+			},
+		}); err != nil {
 			return ctrl.Result{}, err
 		}
 		logger.Info("Cleanup done for ClusterRoleBinding")
 
-		if err := r.cleanupResource(ctx, cr, &appsv1.DaemonSet{ObjectMeta: metav1.ObjectMeta{Name: "kubeshark-worker-daemonset"}}); err != nil {
-			return ctrl.Result{}, err
-		}
-		logger.Info("Cleanup done for worker daemonset")
-
-		if err := r.cleanupResource(ctx, cr, &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "kubeshark-frontend-service"}}); err != nil {
-			return ctrl.Result{}, err
-		}
-		logger.Info("Cleanup done for Frontend Service")
-
-		if err := r.cleanupResource(ctx, cr, &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "kubeshark-frontend-deployment"}}); err != nil {
-			return ctrl.Result{}, err
-		}
-		logger.Info("Cleanup done for Frontend Deployment")
-
-		if err := r.cleanupResource(ctx, cr, &networkingv1.Ingress{ObjectMeta: metav1.ObjectMeta{Name: "kubeshark-frontend-ingress"}}); err != nil {
-			return ctrl.Result{}, err
-		}
-		logger.Info("Cleanup done for frontend Ingress")
-
-		// Remove finalizer once cleanup is complete
+		// Finalizer removal
 		controllerutil.RemoveFinalizer(cr, finalizerName)
 		if err := r.Update(ctx, cr); err != nil {
 			return ctrl.Result{}, err
 		}
-		logger.Info("Removed finalizer from cr")
+		logger.Info("Removed finalizer from CR")
 
 		return ctrl.Result{}, nil
 	}
 
 	return ctrl.Result{}, nil
 }
-	
+
 // SetupWithManager sets up the controller with the Manager.
 func (r *KubesharkReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).

@@ -22,7 +22,7 @@ import (
 func (r *KubesharkReconciler) createOrUpdateHubService(cr *kubesharkv1beta1.Kubeshark, labels map[string]string) (*corev1.Service, string, error) {
 	desiredService := &corev1.Service{
 		ObjectMeta: ctrl.ObjectMeta{
-			Name:      getOrDefaultString(cr.Spec.HubServiceName, "kubeshark-hub-service"),
+			Name:      getOrDefaultString(cr.Spec.HubServiceName, "kubeshark-hub"),
 			Namespace: cr.Namespace,
 		},
 	}
@@ -114,16 +114,68 @@ func (r *KubesharkReconciler) createOrUpdateHubDeployment(cr *kubesharkv1beta1.K
 func (r *KubesharkReconciler) createOrUpdateHubConfigMap(cr *kubesharkv1beta1.Kubeshark, labels map[string]string) (*corev1.ConfigMap, string, error) {
 	desiredConfigMap := &corev1.ConfigMap{
 		ObjectMeta: ctrl.ObjectMeta{
-			Name:      getOrDefaultString(cr.Spec.HubConfigMapName, "kubeshark-hub-config"),
+			Name:      getOrDefaultString(cr.Spec.HubConfigMapName, "kubeshark-config-map"),
 			Namespace: cr.Namespace,
 		},
 	}
 
+	defaultData := map[string]string{
+		"POD_REGEX":                        ".*",
+		"NAMESPACES":                       "",
+		"EXCLUDED_NAMESPACES":              "",
+		"BPF_OVERRIDE":                     "",
+		"STOPPED":                          "false",
+		"SCRIPTING_SCRIPTS":                "{}",
+		"SCRIPTING_ACTIVE_SCRIPTS":         "",
+		"INGRESS_ENABLED":                  "false",
+		"INGRESS_HOST":                     "ks.svc.cluster.local",
+		"PROXY_FRONT_PORT":                 "8899",
+		"AUTH_ENABLED":                     "true",
+		"AUTH_TYPE":                        "default",
+		"AUTH_SAML_IDP_METADATA_URL":       "",
+		"AUTH_SAML_ROLE_ATTRIBUTE":         "role",
+		"AUTH_SAML_ROLES":                  `{"admin":{"canDownloadPCAP":true,"canStopTrafficCapturing":true,"canUpdateTargetedPods":true,"canUseScripting":true,"filter":"","scriptingPermissions":{"canActivate":true,"canDelete":true,"canSave":true},"showAdminConsoleLink":true}}`,
+		"AUTH_OIDC_ISSUER":                 "not set",
+		"AUTH_OIDC_REFRESH_TOKEN_LIFETIME": "3960h",
+		"AUTH_OIDC_STATE_PARAM_EXPIRY":     "10m",
+		"AUTH_OIDC_BYPASS_SSL_CA_CHECK":    "false",
+		"TELEMETRY_DISABLED":               "false",
+		"SCRIPTING_DISABLED":               "false",
+		"TARGETED_PODS_UPDATE_DISABLED":    "",
+		"PRESET_FILTERS_CHANGING_ENABLED":  "true",
+		"RECORDING_DISABLED":               "",
+		"STOP_TRAFFIC_CAPTURING_DISABLED":  "false",
+		"GLOBAL_FILTER":                    "",
+		"DEFAULT_FILTER":                   "!dns and !error",
+		"TRAFFIC_SAMPLE_RATE":              "100",
+		"JSON_TTL":                         "5m",
+		"PCAP_TTL":                         "10s",
+		"PCAP_ERROR_TTL":                   "60s",
+		"TIMEZONE":                         " ",
+		"CLOUD_LICENSE_ENABLED":            "true",
+		"AI_ASSISTANT_ENABLED":             "true",
+		"DUPLICATE_TIMEFRAME":              "200ms",
+		"ENABLED_DISSECTORS":               "amqp,dns,http,icmp,kafka,redis,sctp,ws,ldap,radius,diameter",
+		"CUSTOM_MACROS":                    `{"https":"tls and (http or http2)"}`,
+		"DISSECTORS_UPDATING_ENABLED":      "true",
+		"DETECT_DUPLICATES":                "false",
+		"PCAP_DUMP_ENABLE":                 "true",
+		"PCAP_TIME_INTERVAL":               "1m",
+		"PCAP_MAX_TIME":                    "1h",
+		"PCAP_MAX_SIZE":                    "500MB",
+		"PORT_MAPPING":                     `{"amqp":[5671,5672],"diameter":[3868],"http":[80,443,8080],"kafka":[9092],"ldap":[389],"redis":[6379]}`,
+	}
+
 	op, err := controllerutil.CreateOrUpdate(context.Background(), r.Client, desiredConfigMap, func() error {
 		desiredConfigMap.Labels = labels
+
+		// Use custom data if provided, otherwise use default
 		if cr.Spec.HubConfigMapData != nil {
 			desiredConfigMap.Data = cr.Spec.HubConfigMapData
+		} else {
+			desiredConfigMap.Data = defaultData
 		}
+
 		return nil
 	})
 
@@ -170,7 +222,7 @@ func (r *KubesharkReconciler) createOrUpdateClusterRole(labels map[string]string
 		desiredClusterRole.Rules = []rbacv1.PolicyRule{
 			{
 				APIGroups: []string{""},
-				Resources: []string{"nodes", "pods", "services", "endpoints", "persistentvolumeclaims"},
+				Resources: []string{"configmaps", "secrets", "nodes", "pods", "services", "endpoints", "persistentvolumeclaims"},
 				Verbs:     []string{"list", "get", "watch"},
 			},
 			{
@@ -212,7 +264,12 @@ func (r *KubesharkReconciler) createOrUpdateClusterRoleBinding(cr *kubesharkv1be
 		desiredClusterRoleBinding.Subjects = []rbacv1.Subject{
 			{
 				Kind:      "ServiceAccount",
-				Name:      getOrDefaultString(cr.Spec.ServiceAccountHub, "kubeshark-sa"), // Dynamic service account name from CR or default
+				Name:      getOrDefaultString(cr.Spec.ServiceAccountHub, "kubeshark-service-account"), // Dynamic service account name from CR or default
+				Namespace: cr.Namespace,
+			},
+			{
+				Kind:      "ServiceAccount",
+				Name:      getOrDefaultString(cr.Spec.ServiceAccountWorker, "kubeshark-worker"), // Dynamic service account name from CR or default
 				Namespace: cr.Namespace,
 			},
 		}
@@ -431,107 +488,249 @@ func (r *KubesharkReconciler) createOrUpdateFrontendIngress(cr *kubesharkv1beta1
 	return desiredIngress, resp, nil
 }
 
-func (r *KubesharkReconciler) createOrUpdateWorkerDaemonSet(cr *kubesharkv1beta1.Kubeshark, labels map[string]string) (*appsv1.DaemonSet, string, error) {
-	// ObjectMeta (static, can stay outside the mutateFn)
-	desiredDaemonSet := &appsv1.DaemonSet{
+func (r *KubesharkReconciler) createOrUpdateWorkerDaemonSet(
+	cr *kubesharkv1beta1.Kubeshark,
+	labels map[string]string,
+) (*appsv1.DaemonSet, string, error) {
+
+	namespace := cr.Spec.Namespace
+	if namespace == "" {
+		namespace = cr.Namespace // fallback to the CR's namespace
+	}
+
+	ds := &appsv1.DaemonSet{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "kubeshark-worker-daemonset",
-			Namespace: cr.Namespace,
-			Labels:    labels,
+			Namespace: namespace,
 		},
 	}
 
-	// CreateOrUpdate with mutateFn to dynamically modify the DaemonSetSpec
-	op, err := controllerutil.CreateOrUpdate(context.Background(), r.Client, desiredDaemonSet, func() error {
-		// Set dynamic DaemonSet spec values inside the mutateFn
-		desiredDaemonSet.Spec.Selector = &metav1.LabelSelector{
-			MatchLabels: labels,
-		}
+	op, err := controllerutil.CreateOrUpdate(context.TODO(), r.Client, ds, func() error {
+		ds.Labels = labels
+		ds.Spec = buildWorkerDaemonSetSpec(cr, labels)
+		return nil
+	})
+	if err != nil {
+		return nil, "", err
+	}
 
-		// Set the PodTemplateSpec with dynamic values
-		desiredDaemonSet.Spec.Template = corev1.PodTemplateSpec{
+	return ds, string(op), nil
+}
+
+func buildWorkerDaemonSetSpec(cr *kubesharkv1beta1.Kubeshark, labels map[string]string) appsv1.DaemonSetSpec {
+	privileged := true
+	bidirectional := corev1.MountPropagationBidirectional
+	serviceAccount := cr.Spec.ServiceAccountWorker
+	if serviceAccount == "" {
+		serviceAccount = "kubeshark-worker"
+	}
+
+	return appsv1.DaemonSetSpec{
+		Selector: &metav1.LabelSelector{
+			MatchLabels: labels,
+		},
+		Template: corev1.PodTemplateSpec{
 			ObjectMeta: metav1.ObjectMeta{
 				Labels: labels,
 			},
 			Spec: corev1.PodSpec{
-				Containers: []corev1.Container{
+				InitContainers: []corev1.Container{
 					{
-						Name:  "worker",
-						Image: getOrDefaultString(cr.Spec.WorkerImage, "docker.io/kubeshark/worker:v52.3.82"),
-						Env: []corev1.EnvVar{
-							{
-								Name:  "HUB_ADDRESS",
-								Value: "http://kubeshark-hub:80", // Default hub address
-							},
-							{
-								Name: "POD_NAME",
-								ValueFrom: &corev1.EnvVarSource{
-									FieldRef: &corev1.ObjectFieldSelector{
-										FieldPath: "metadata.name",
-									},
-								},
-							},
-							{
-								Name: "POD_NAMESPACE",
-								ValueFrom: &corev1.EnvVarSource{
-									FieldRef: &corev1.ObjectFieldSelector{
-										FieldPath: "metadata.namespace",
-									},
-								},
-							},
+						Name:            "mount-bpf",
+						Image:           cr.Spec.WorkerImage,
+						ImagePullPolicy: corev1.PullAlways,
+						Command: []string{
+							"/bin/sh", "-c",
+							"mkdir -p /sys/fs/bpf && mount | grep -q '/sys/fs/bpf' || mount -t bpf bpf /sys/fs/bpf",
 						},
-						Ports: []corev1.ContainerPort{
-							{
-								ContainerPort: 8897, // Default worker port for traffic capture
-								Name:          "http",
-							},
+						SecurityContext: &corev1.SecurityContext{
+							Privileged: &privileged,
 						},
 						VolumeMounts: []corev1.VolumeMount{
 							{
-								Name:      "host-run",
-								MountPath: "/var/run", // Required for capturing traffic
-							},
-						},
-						Resources: corev1.ResourceRequirements{
-							Limits: corev1.ResourceList{
-								corev1.ResourceCPU:    resource.MustParse("500m"),  // Default CPU limit
-								corev1.ResourceMemory: resource.MustParse("128Mi"), // Default memory limit
-							},
-							Requests: corev1.ResourceList{
-								corev1.ResourceCPU:    resource.MustParse("200m"), // Default CPU request
-								corev1.ResourceMemory: resource.MustParse("64Mi"), // Default memory request
-							},
-						},
-						SecurityContext: &corev1.SecurityContext{
-							Privileged: getOrDefaultBoolPtr(true), // Required for network capture
-						},
-					},
-				},
-				Volumes: []corev1.Volume{
-					{
-						Name: "host-run",
-						VolumeSource: corev1.VolumeSource{
-							HostPath: &corev1.HostPathVolumeSource{
-								Path: "/var/run", // Host path to enable network capture
+								Name:             "sys",
+								MountPath:        "/sys",
+								MountPropagation: &bidirectional,
 							},
 						},
 					},
 				},
-				ServiceAccountName: getOrDefaultString(cr.Spec.ServiceAccountWorker, "kubeshark-worker"),
-				NodeSelector: map[string]string{
-					"kubernetes.io/os": "linux", // Target Linux nodes by default
+				Containers: []corev1.Container{
+					buildSnifferContainer(cr),
+					buildTracerContainer(cr),
+				},
+				ServiceAccountName: serviceAccount,
+				HostNetwork:        true,
+				DNSPolicy:          corev1.DNSClusterFirstWithHostNet,
+				Tolerations: []corev1.Toleration{
+					{Operator: corev1.TolerationOpExists, Effect: corev1.TaintEffectNoExecute},
+				},
+				Affinity: &corev1.Affinity{
+					NodeAffinity: &corev1.NodeAffinity{
+						RequiredDuringSchedulingIgnoredDuringExecution: &corev1.NodeSelector{
+							NodeSelectorTerms: []corev1.NodeSelectorTerm{
+								{
+									MatchExpressions: []corev1.NodeSelectorRequirement{
+										{
+											Key:      "kubernetes.io/os",
+											Operator: corev1.NodeSelectorOpIn,
+											Values:   []string{"linux"},
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+				Volumes: buildWorkerVolumes(),
+			},
+		},
+	}
+}
+func buildSnifferContainer(cr *kubesharkv1beta1.Kubeshark) corev1.Container {
+	privileged := true
+
+	return corev1.Container{
+		Name:            "sniffer",
+		Image:           cr.Spec.WorkerImage,
+		ImagePullPolicy: corev1.PullAlways,
+		Command: []string{
+			"./worker", "-i", "any", "-port", "48999", "-metrics-port", "49100",
+			"-packet-capture", "best", "warning",
+			"-servicemesh", "-procfs", "/hostproc",
+			"-enable-watchdog", "-resolution-strategy", "auto", "-staletimeout", "30",
+		},
+		Ports: []corev1.ContainerPort{
+			{Name: "metrics", ContainerPort: 49100, Protocol: corev1.ProtocolTCP},
+		},
+		Env:       getCommonEnv(),
+		Resources: getDefaultResources(),
+		SecurityContext: &corev1.SecurityContext{
+			Privileged: &privileged,
+		},
+		ReadinessProbe: getTCPProbe(48999),
+		LivenessProbe:  getTCPProbe(48999),
+		VolumeMounts: getCommonVolumeMounts([]corev1.VolumeMount{
+			{Name: "data", MountPath: "/app/sniffer_data"}, // Unique path for sniffer,
+		}),
+	}
+}
+
+func getTCPProbe(port int32) *corev1.Probe {
+	return &corev1.Probe{
+		InitialDelaySeconds: 5,
+		PeriodSeconds:       5,
+		FailureThreshold:    3,
+		SuccessThreshold:    1,
+		TimeoutSeconds:      1,
+		ProbeHandler: corev1.ProbeHandler{
+			TCPSocket: &corev1.TCPSocketAction{
+				Port: intstr.FromInt(int(port)),
+			},
+		},
+	}
+}
+
+func buildTracerContainer(cr *kubesharkv1beta1.Kubeshark) corev1.Container {
+	privileged := true
+	hostToContainer := corev1.MountPropagationHostToContainer
+
+	return corev1.Container{
+		Name:            "tracer",
+		Image:           cr.Spec.WorkerImage,
+		ImagePullPolicy: corev1.PullAlways,
+		Command: []string{
+			"./tracer", "-procfs", "/hostproc", "-disable-tls-log", "warning",
+		},
+		Env:       getCommonEnv(),
+		Resources: getDefaultResources(),
+		SecurityContext: &corev1.SecurityContext{
+			Privileged: &privileged,
+		},
+		VolumeMounts: getCommonVolumeMounts([]corev1.VolumeMount{
+			{Name: "data", MountPath: "/app/tracer_data"}, // Unique path for tracer
+			{Name: "os-release", MountPath: "/etc/os-release", ReadOnly: true},
+			{Name: "root", MountPath: "/hostroot", ReadOnly: true, MountPropagation: &hostToContainer},
+		}),
+	}
+}
+func buildWorkerVolumes() []corev1.Volume {
+	return []corev1.Volume{
+		{Name: "proc", VolumeSource: corev1.VolumeSource{HostPath: &corev1.HostPathVolumeSource{Path: "/proc"}}},
+		{Name: "sys", VolumeSource: corev1.VolumeSource{HostPath: &corev1.HostPathVolumeSource{Path: "/sys"}}},
+		{Name: "lib-modules", VolumeSource: corev1.VolumeSource{HostPath: &corev1.HostPathVolumeSource{Path: "/lib/modules"}}},
+		{Name: "os-release", VolumeSource: corev1.VolumeSource{HostPath: &corev1.HostPathVolumeSource{Path: "/etc/os-release"}}},
+		{Name: "root", VolumeSource: corev1.VolumeSource{HostPath: &corev1.HostPathVolumeSource{Path: "/"}}},
+		{Name: "data", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{
+			SizeLimit: resource.NewQuantity(5*1024*1024*1024, resource.BinarySI),
+		}}},
+	}
+}
+func getCommonEnv() []corev1.EnvVar {
+	return []corev1.EnvVar{
+		{
+			Name: "POD_NAME",
+			ValueFrom: &corev1.EnvVarSource{
+				FieldRef: &corev1.ObjectFieldSelector{
+					FieldPath: "metadata.name",
 				},
 			},
-		}
-		return nil
-	})
-
-	if err != nil {
-		return nil, "", fmt.Errorf("failed to create or update Worker DaemonSet: %w", err)
+		},
+		{
+			Name: "POD_NAMESPACE",
+			ValueFrom: &corev1.EnvVarSource{
+				FieldRef: &corev1.ObjectFieldSelector{
+					FieldPath: "metadata.namespace",
+				},
+			},
+		},
+		{
+			Name:  "PROFILING_ENABLED",
+			Value: "false",
+		},
+		{
+			Name:  "SENTRY_ENABLED",
+			Value: "false",
+		},
+		{
+			Name:  "SENTRY_ENVIRONMENT",
+			Value: "production",
+		},
 	}
-
-	resp := fmt.Sprintf("%s Worker DaemonSet", op)
-	return desiredDaemonSet, resp, nil
+}
+func getDefaultResources() corev1.ResourceRequirements {
+	return corev1.ResourceRequirements{
+		Limits: corev1.ResourceList{
+			corev1.ResourceMemory: resource.MustParse("5Gi"),
+		},
+		Requests: corev1.ResourceList{
+			corev1.ResourceCPU:    resource.MustParse("50m"),
+			corev1.ResourceMemory: resource.MustParse("50Mi"),
+		},
+	}
+}
+func getCommonVolumeMounts(extraMounts []corev1.VolumeMount) []corev1.VolumeMount {
+	commonMounts := []corev1.VolumeMount{
+		{
+			Name:      "proc",
+			MountPath: "/hostproc",
+			ReadOnly:  true,
+		},
+		{
+			Name:      "sys",
+			MountPath: "/sys",
+			ReadOnly:  true,
+			MountPropagation: func() *corev1.MountPropagationMode {
+				mode := corev1.MountPropagationHostToContainer
+				return &mode
+			}(),
+		},
+		{
+			Name:      "data",
+			MountPath: "/app/data",
+		},
+	}
+	return append(commonMounts, extraMounts...)
 }
 
 func (r *KubesharkReconciler) createOrUpdateWorkerServiceAccount(cr *kubesharkv1beta1.Kubeshark, labels map[string]string) (*corev1.ServiceAccount, string, error) {
@@ -553,6 +752,41 @@ func (r *KubesharkReconciler) createOrUpdateWorkerServiceAccount(cr *kubesharkv1
 
 	resp := fmt.Sprintf("%s Worker ServiceAccount", op)
 	return desiredServiceAccount, resp, nil
+}
+
+func (r *KubesharkReconciler) createOrUpdateKubesharkSecret(cr *kubesharkv1beta1.Kubeshark, labels map[string]string) (*corev1.Secret, string, error) {
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "kubeshark-secret",
+			Namespace: cr.Namespace,
+			Labels:    labels,
+		},
+	}
+
+	op, err := controllerutil.CreateOrUpdate(context.Background(), r.Client, secret, func() error {
+		if secret.StringData == nil {
+			secret.StringData = map[string]string{}
+		}
+
+		secret.Type = corev1.SecretTypeOpaque
+
+		// Accessing fields from nested SecretKubeshark struct
+		sk := cr.Spec.SecretKubeshark
+
+		secret.StringData["LICENSE"] = getOrDefaultString(sk.License, "")
+		secret.StringData["SCRIPTING_ENV"] = getOrDefaultString(sk.ScriptingEnvJson, "{}")
+		secret.StringData["OIDC_CLIENT_ID"] = getOrDefaultString(sk.OidcClientID, "not set")
+		secret.StringData["OIDC_CLIENT_SECRET"] = getOrDefaultString(sk.OidcClientSecret, "not set")
+
+		return nil
+	})
+
+	if err != nil {
+		return nil, "", fmt.Errorf("failed to create or update Secret: %w", err)
+	}
+
+	resp := fmt.Sprintf("%s kubeshark-secret", op)
+	return secret, resp, nil
 }
 
 // ################################

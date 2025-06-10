@@ -21,6 +21,3 @@ func getOrDefaultInt(value, defaultValue int32) *int32 {
 	}
 	return &value
 }
-func getOrDefaultBoolPtr(val bool) *bool {
-	return &val
-}
