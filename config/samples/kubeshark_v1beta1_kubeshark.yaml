@@ -2,11 +2,13 @@ apiVersion: kubeshark.opstreelabs.in/v1beta1
 kind: Kubeshark
 metadata:
   labels:
-    app.kubernetes.io/name: kubeshark
-    app.kubernetes.io/instance: kubeshark-sample
-    app.kubernetes.io/part-of: kubeshark-operator
+    app.kubernetes.io/name: kubeshark-operator
     app.kubernetes.io/managed-by: kustomize
-    app.kubernetes.io/created-by: kubeshark-operator
   name: kubeshark-sample
 spec:
-  # TODO(user): Add fields here
+  hubImage: docker.io/kubeshark/hub:v52.3.82
+  frontendImage: docker.io/kubeshark/front:v52.3.82
+  workerImage: docker.io/kubeshark/worker:v52.3.82
+  hubReplicas: 1
+  ingressClassName: nginx
+  ingressHost: kubeshark.example.com
