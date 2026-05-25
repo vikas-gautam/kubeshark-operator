@@ -1,4 +1,4 @@
-# kubeshark-operator-v2 - AI Agent Guide
+# kubeshark-operator - AI Agent Guide
 
 ## Project Structure
 

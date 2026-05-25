@@ -6,7 +6,7 @@ cliVersion: 4.14.0
 domain: opstreelabs.in
 layout:
 - go.kubebuilder.io/v4
-projectName: kubeshark-operator-v2
+projectName: kubeshark-operator
 repo: kubeshark-operator
 resources:
 - api:
